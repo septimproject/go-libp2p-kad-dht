@@ -122,7 +122,8 @@ func (dht *IpfsDHT) GetValue(ctx context.Context, key string, opts ...routing.Op
 	}
 	opts = append(opts, Quorum(internalConfig.GetQuorum(&cfg)))
 
-	responses, err := dht.SearchValue(ctx, key, opts...)
+	var lookupErr error
+	responses, err := dht.searchValue(ctx, key, &lookupErr, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +138,9 @@ func (dht *IpfsDHT) GetValue(ctx context.Context, key string, opts ...routing.Op
 	}
 
 	if best == nil {
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
 		return nil, routing.ErrNotFound
 	}
 	logger.Debugf("GetValue %v %x", internal.LoggableRecordKeyString(key), best)
@@ -145,6 +149,12 @@ func (dht *IpfsDHT) GetValue(ctx context.Context, key string, opts ...routing.Op
 
 // SearchValue searches for the value corresponding to given Key and streams the results.
 func (dht *IpfsDHT) SearchValue(ctx context.Context, key string, opts ...routing.Option) (ch <-chan []byte, err error) {
+	return dht.searchValue(ctx, key, nil, opts...)
+}
+
+// lookupErr is written before closing the result channel. GetValue consumes the
+// channel completely before reading it; the streaming API remains unchanged.
+func (dht *IpfsDHT) searchValue(ctx context.Context, key string, lookupErr *error, opts ...routing.Option) (ch <-chan []byte, err error) {
 	ctx, end := tracer.SearchValue(dhtName, ctx, key, opts...)
 	defer func() { ch, err = end(ch, err) }()
 
@@ -157,19 +167,48 @@ func (dht *IpfsDHT) SearchValue(ctx context.Context, key string, opts ...routing
 		return nil, err
 	}
 
-	responsesNeeded := 0
-	if !cfg.Offline {
-		responsesNeeded = internalConfig.GetQuorum(&cfg)
+	if cfg.Offline {
+		rec, err := dht.getLocal(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		out := make(chan []byte, 1)
+		if rec != nil && dht.Validator.Validate(key, rec.GetValue()) == nil {
+			out <- rec.GetValue()
+		}
+		close(out)
+		return out, nil
 	}
 
+	responsesNeeded := internalConfig.GetQuorum(&cfg)
+
+	// The result pipeline owns its outstanding lookup work. Satisfying a quorum
+	// must cancel slow replicas even when the caller keeps its context alive.
+	ctx, cancel := context.WithCancel(ctx)
 	stopCh := make(chan struct{})
 	valCh, lookupRes := dht.getValues(ctx, key, stopCh)
 
 	out := make(chan []byte)
 	go func() {
 		defer close(out)
+		defer cancel()
 		best, peersWithBest, aborted := dht.searchValueQuorum(ctx, key, valCh, stopCh, out, responsesNeeded)
-		if best == nil || aborted {
+		if best == nil {
+			if lookupErr != nil {
+				select {
+				case l := <-lookupRes:
+					if l != nil {
+						*lookupErr = l.err
+					}
+				case <-ctx.Done():
+					*lookupErr = ctx.Err()
+				}
+			}
+			return
+		}
+		if aborted {
+			// A validated quorum is a result, not a lookup failure. Do not wait
+			// for unrelated requests to drain before closing the result channel.
 			return
 		}
 
@@ -210,7 +249,7 @@ func (dht *IpfsDHT) searchValueQuorum(ctx context.Context, key string, valCh <-c
 				}
 			}
 
-			if nvals > 0 && numResponses > nvals {
+			if nvals > 0 && numResponses >= nvals {
 				close(stopCh)
 				return true
 			}
@@ -371,6 +410,7 @@ func (dht *IpfsDHT) getValues(ctx context.Context, key string, stopQuery chan st
 			},
 		)
 		if err != nil {
+			lookupResCh <- &lookupWithFollowupResult{err: err}
 			return
 		}
 		lookupResCh <- lookupRes

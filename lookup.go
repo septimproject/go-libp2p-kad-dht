@@ -12,7 +12,9 @@ import (
 	kb "github.com/libp2p/go-libp2p-kbucket"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/routing"
+	ks "github.com/whyrusleeping/go-keyspace"
 	"go.opentelemetry.io/otel/trace"
+	"gonum.org/v1/gonum/mathext"
 )
 
 // GetClosestPeers is a Kademlia 'node lookup' operation. Returns a slice of
@@ -21,6 +23,35 @@ import (
 // If the context is canceled, this function will return the context error
 // along with the closest K peers it has found so far.
 func (dht *IpfsDHT) GetClosestPeers(ctx context.Context, key string) ([]peer.ID, error) {
+	return dht.getClosestPeers(ctx, key, dht.pmGetClosestPeers(key))
+}
+
+// GetClosestPeersWithProgress reports responding peers that satisfy Optimistic
+// Provide's individual-distance threshold while ordinary discovery continues.
+// Without a network-size estimate it behaves like GetClosestPeers. The callback
+// may run concurrently and must not block; it is never called after return.
+// Final peers, termination, follow-up, cancellation and errors are unchanged.
+func (dht *IpfsDHT) GetClosestPeersWithProgress(ctx context.Context, key string, onPeer func(peer.ID)) ([]peer.ID, error) {
+	query := dht.pmGetClosestPeers(key)
+	if onPeer == nil {
+		return dht.getClosestPeers(ctx, key, query)
+	}
+	size, err := dht.nsEstimator.NetworkSize()
+	if err != nil || size <= 0 {
+		return dht.getClosestPeers(ctx, key, query)
+	}
+	threshold := mathext.GammaIncRegInv(float64(dht.bucketSize), 1-optProvIndividualThresholdCertainty) / float64(size)
+	target := ks.XORKeySpace.Key([]byte(key))
+	return dht.getClosestPeers(ctx, key, func(ctx context.Context, id peer.ID) ([]*peer.AddrInfo, error) {
+		peers, err := query(ctx, id)
+		if err == nil && netsize.NormedDistance(id, target) <= threshold {
+			onPeer(id)
+		}
+		return peers, err
+	})
+}
+
+func (dht *IpfsDHT) getClosestPeers(ctx context.Context, key string, query queryFn) ([]peer.ID, error) {
 	ctx, span := internal.StartSpan(ctx, "IpfsDHT.GetClosestPeers", trace.WithAttributes(internal.KeyAsAttribute("Key", key)))
 	defer span.End()
 
@@ -29,8 +60,11 @@ func (dht *IpfsDHT) GetClosestPeers(ctx context.Context, key string) ([]peer.ID,
 	}
 
 	// TODO: I can break the interface! return []peer.ID
-	lookupRes, err := dht.runLookupWithFollowup(ctx, key, dht.pmGetClosestPeers(key), func(*qpeerset.QueryPeerset) bool { return false })
+	lookupRes, err := dht.runLookupWithFollowup(ctx, key, query, func(*qpeerset.QueryPeerset) bool { return false })
 	if err != nil {
+		if lookupRes != nil {
+			return lookupRes.peers, err
+		}
 		return nil, err
 	}
 

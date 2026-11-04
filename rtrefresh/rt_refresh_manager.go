@@ -156,6 +156,9 @@ func (r *RtRefreshManager) pingAndEvictPeers(ctx context.Context) {
 			defer span.End()
 
 			if err := r.h.Connect(livelinessCtx, peer.AddrInfo{ID: ps.Id}); err != nil {
+				if ctx.Err() != nil || internal.IsAdmissionError(err) {
+					return
+				}
 				logger.Debugw("evicting peer after failed connection", "peer", peerIdStr, "error", err)
 				span.RecordError(err)
 				r.rt.RemovePeer(ps.Id)
@@ -163,6 +166,9 @@ func (r *RtRefreshManager) pingAndEvictPeers(ctx context.Context) {
 			}
 
 			if err := r.refreshPingFnc(livelinessCtx, ps.Id); err != nil {
+				if ctx.Err() != nil || internal.IsAdmissionError(err) {
+					return
+				}
 				logger.Debugw("evicting peer after failed ping", "peer", peerIdStr, "error", err)
 				span.RecordError(err)
 				r.rt.RemovePeer(ps.Id)

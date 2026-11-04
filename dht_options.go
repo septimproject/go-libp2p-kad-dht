@@ -331,6 +331,16 @@ func QueryFilter(filter QueryFilterFunc) Option {
 	}
 }
 
+// RoutingTableConnectionProtection controls hard connection protection for the
+// first two routing buckets. It defaults to true. Disabling it retains routing
+// priority tags while allowing a bounded host to trim and redial these contacts.
+func RoutingTableConnectionProtection(enabled bool) Option {
+	return func(c *dhtcfg.Config) error {
+		c.RoutingTable.ProtectConnections = enabled
+		return nil
+	}
+}
+
 // RoutingTableFilter sets a function that approves which peers may be added to the routing table. The host should
 // already have at least one connection to the peer under consideration.
 func RoutingTableFilter(filter RouteTableFilterFunc) Option {

@@ -234,7 +234,7 @@ func (ms *peerMessageSender) SendMessage(ctx context.Context, pmes *pb.Message) 
 			return err
 		}
 
-		if err := ms.writeMsg(pmes); err != nil {
+		if err := ms.writeMsg(ctx, pmes); err != nil {
 			_ = ms.s.Reset()
 			ms.s = nil
 
@@ -271,7 +271,7 @@ func (ms *peerMessageSender) SendRequest(ctx context.Context, pmes *pb.Message) 
 			return nil, err
 		}
 
-		if err := ms.writeMsg(pmes); err != nil {
+		if err := ms.writeMsg(ctx, pmes); err != nil {
 			_ = ms.s.Reset()
 			ms.s = nil
 
@@ -313,8 +313,22 @@ func (ms *peerMessageSender) SendRequest(ctx context.Context, pmes *pb.Message) 
 	}
 }
 
-func (ms *peerMessageSender) writeMsg(pmes *pb.Message) error {
-	return WriteMsg(ms.s, pmes)
+func (ms *peerMessageSender) writeMsg(ctx context.Context, pmes *pb.Message) error {
+	return WriteMsg(requestWriter{ctx: ctx, Writer: ms.s}, pmes)
+}
+
+type requestWriter struct {
+	io.Writer
+	ctx context.Context
+}
+
+func (w requestWriter) Write(p []byte) (int, error) {
+	if writer, ok := w.Writer.(interface {
+		WriteContext(context.Context, []byte) (int, error)
+	}); ok {
+		return writer.WriteContext(w.ctx, p)
+	}
+	return w.Writer.Write(p)
 }
 
 func (ms *peerMessageSender) ctxReadMsg(ctx context.Context, mes *pb.Message) error {

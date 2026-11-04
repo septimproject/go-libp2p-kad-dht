@@ -468,7 +468,7 @@ func makeRoutingTable(dht *IpfsDHT, cfg dhtcfg.Config, maxLastSuccessfulOutbound
 
 	rt.PeerAdded = func(p peer.ID) {
 		commonPrefixLen := kb.CommonPrefixLen(dht.selfKey, kb.ConvertPeerID(p))
-		if commonPrefixLen < protectedBuckets {
+		if cfg.RoutingTable.ProtectConnections && commonPrefixLen < protectedBuckets {
 			cmgr.Protect(p, kbucketTag)
 		} else {
 			cmgr.TagPeer(p, kbucketTag, baseConnMgrScore)

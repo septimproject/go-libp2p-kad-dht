@@ -69,7 +69,8 @@ type query struct {
 
 	// terminated is set when the first worker thread encounters the termination condition.
 	// Its role is to make sure that once termination is determined, it is sticky.
-	terminated bool
+	terminated   bool
+	admissionErr error // owned by the query loop, never written by workers
 
 	// waitGroup ensures lookup does not end until all query goroutines complete.
 	waitGroup sync.WaitGroup
@@ -89,6 +90,7 @@ type lookupWithFollowupResult struct {
 	// indicates that neither the lookup nor the followup has been prematurely terminated by an external condition such
 	// as context cancellation or the stop function being called.
 	completed bool
+	err       error
 }
 
 // runLookupWithFollowup executes the lookup on the target using the given query function and stopping when either the
@@ -105,7 +107,7 @@ func (dht *IpfsDHT) runLookupWithFollowup(ctx context.Context, target string, qu
 	// run the query
 	lookupRes, qps, err := dht.runQuery(ctx, target, queryFn, stopFn)
 	if err != nil {
-		return nil, err
+		return lookupRes, err
 	}
 
 	// query all of the top K peers we've either Heard about or have outstanding queries we're Waiting on.
@@ -129,14 +131,25 @@ func (dht *IpfsDHT) runLookupWithFollowup(ctx context.Context, target string, qu
 		return lookupRes, nil
 	}
 
-	doneCh := make(chan struct{}, len(queryPeers))
+	doneCh := make(chan error, len(queryPeers))
 	followUpCtx, cancelFollowUp := context.WithCancel(ctx)
 	defer cancelFollowUp()
+	// Follow-up work obeys the same concurrency bound as the iterative lookup.
+	// Starting one goroutine per bucket entry defeats host RPC/dial admission.
+	jobs := make(chan peer.ID, len(queryPeers))
 	for _, p := range queryPeers {
-		qp := p
+		jobs <- p
+	}
+	close(jobs)
+	for range min(dht.alpha, len(queryPeers)) {
 		go func() {
-			_, _ = queryFn(followUpCtx, qp)
-			doneCh <- struct{}{}
+			for p := range jobs {
+				err := followUpCtx.Err()
+				if err == nil {
+					_, err = queryFn(followUpCtx, p)
+				}
+				doneCh <- err
+			}
 		}()
 	}
 
@@ -145,7 +158,10 @@ func (dht *IpfsDHT) runLookupWithFollowup(ctx context.Context, target string, qu
 processFollowUp:
 	for i := range queryPeers {
 		select {
-		case <-doneCh:
+		case err := <-doneCh:
+			if lookupRes.err == nil && internal.IsAdmissionError(err) {
+				lookupRes.err = errors.Join(network.ErrResourceLimitExceeded, err)
+			}
 			followupsCompleted++
 			if stopFn(qps) {
 				cancelFollowUp()
@@ -163,11 +179,16 @@ processFollowUp:
 
 	if !lookupRes.completed {
 		for i := followupsCompleted; i < len(queryPeers); i++ {
-			<-doneCh
+			if err := <-doneCh; lookupRes.err == nil && internal.IsAdmissionError(err) {
+				lookupRes.err = errors.Join(network.ErrResourceLimitExceeded, err)
+			}
 		}
 	}
 
-	return lookupRes, nil
+	if stopFn(qps) {
+		return lookupRes, nil
+	}
+	return lookupRes, lookupRes.err
 }
 
 func (dht *IpfsDHT) runQuery(ctx context.Context, target string, queryFn queryFn, stopFn stopFn) (*lookupWithFollowupResult, *qpeerset.QueryPeerset, error) {
@@ -215,6 +236,14 @@ func (dht *IpfsDHT) runQuery(ctx context.Context, target string, queryFn queryFn
 	}
 
 	res := q.constructLookupResult()
+	if !stopFn(q.queryPeers) {
+		if q.admissionErr != nil {
+			return res, q.queryPeers, q.admissionErr
+		}
+		if ctx.Err() == nil && len(q.queryPeers.GetClosestNInStates(1, qpeerset.PeerQueried)) == 0 {
+			return res, q.queryPeers, ErrNoPeersQueried
+		}
+	}
 	return res, q.queryPeers, nil
 }
 
@@ -278,6 +307,7 @@ type queryUpdate struct {
 	queried     []peer.ID
 	heard       []peer.ID
 	unreachable []peer.ID
+	err         error
 
 	queryDuration time.Duration
 }
@@ -427,10 +457,10 @@ func (q *query) queryPeer(ctx context.Context, ch chan<- *queryUpdate, p peer.ID
 	// dial the peer
 	if err := q.dht.dialPeer(dialCtx, p); err != nil {
 		// remove the peer if there was a dial failure..but not because of a context cancellation
-		if dialCtx.Err() == nil {
+		if dialCtx.Err() == nil && !internal.IsAdmissionError(err) {
 			q.dht.peerStoppedDHT(p)
 		}
-		ch <- &queryUpdate{cause: p, unreachable: []peer.ID{p}}
+		ch <- &queryUpdate{cause: p, unreachable: []peer.ID{p}, err: err}
 		return
 	}
 
@@ -438,10 +468,10 @@ func (q *query) queryPeer(ctx context.Context, ch chan<- *queryUpdate, p peer.ID
 	// send query RPC to the remote peer
 	newPeers, err := q.queryFn(queryCtx, p)
 	if err != nil {
-		if queryCtx.Err() == nil {
+		if queryCtx.Err() == nil && !internal.IsAdmissionError(err) {
 			q.dht.peerStoppedDHT(p)
 		}
-		ch <- &queryUpdate{cause: p, unreachable: []peer.ID{p}}
+		ch <- &queryUpdate{cause: p, unreachable: []peer.ID{p}, err: err}
 		return
 	}
 
@@ -496,6 +526,9 @@ func (q *query) queryPeer(ctx context.Context, ch chan<- *queryUpdate, p peer.ID
 }
 
 func (q *query) updateState(ctx context.Context, up *queryUpdate) {
+	if q.admissionErr == nil && internal.IsAdmissionError(up.err) {
+		q.admissionErr = errors.Join(network.ErrResourceLimitExceeded, up.err)
+	}
 	if q.terminated {
 		panic("update should not be invoked after the logical lookup termination")
 	}

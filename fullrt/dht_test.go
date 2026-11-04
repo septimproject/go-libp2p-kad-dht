@@ -109,11 +109,8 @@ func TestDivideByChunkSize(t *testing.T) {
 }
 
 func TestIPDiversityFilter(t *testing.T) {
-	ctx := context.Background()
-	h, err := libp2p.New()
-	require.NoError(t, err)
-	dht, err := NewFullRT(h, "", DHTOption(kaddht.BootstrapPeers(kaddht.GetDefaultBootstrapPeerAddrInfos()...)))
-	require.NoError(t, err)
+	ctx := t.Context()
+	dht := newTestFullRT(t)
 
 	dht.bucketSize = 3
 	dht.ipDiversityFilterLimit = 1

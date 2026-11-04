@@ -66,6 +66,7 @@ type Config struct {
 	MsgSenderBuilder       func(h host.Host, protos []protocol.ID) pb.MessageSenderWithDisconnect
 
 	RoutingTable struct {
+		ProtectConnections  bool
 		RefreshQueryTimeout time.Duration
 		RefreshInterval     time.Duration
 		AutoRefresh         bool
@@ -159,6 +160,7 @@ var Defaults = func(o *Config) error {
 	o.RoutingTable.RefreshQueryTimeout = 10 * time.Second
 	o.RoutingTable.RefreshInterval = 10 * time.Minute
 	o.RoutingTable.AutoRefresh = true
+	o.RoutingTable.ProtectConnections = true
 	o.RoutingTable.PeerFilter = EmptyRTFilter
 	o.RoutingTable.PersistInterval = time.Hour
 

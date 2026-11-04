@@ -52,10 +52,10 @@ func TestRTEvictionOnFailedQuery(t *testing.T) {
 
 	// failed queries should remove the peers from the RT
 	_, err := d1.GetClosestPeers(ctx, "test")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoPeersQueried)
 
 	_, err = d2.GetClosestPeers(ctx, "test")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrNoPeersQueried)
 
 	require.NoError(t, tu.WaitFor(ctx, func() error {
 		if checkRoutingTable(d1, d2) {

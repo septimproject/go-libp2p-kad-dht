@@ -2,6 +2,7 @@ package dht
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -349,8 +350,8 @@ func TestValuesDisabled(t *testing.T) {
 
 			_, err = dhtA.GetValue(ctx, pkkey)
 			if enabledA {
-				if err != routing.ErrNotFound {
-					t.Fatal("node A should not have found the value")
+				if !errors.Is(err, ErrNoPeersQueried) {
+					t.Fatalf("node A should report no successful value query: %v", err)
 				}
 				rec, _ := dhtA.getLocal(ctx, pkkey)
 				if rec != nil {
