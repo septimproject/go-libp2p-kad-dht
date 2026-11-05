@@ -90,3 +90,10 @@ from accumulating outside the original concurrency bound. Failed checks release
 ownership and remain retryable. LookupCheckStats reports only fixed aggregate
 counters. Focused synctest/race scenarios exercise duplicate events, distinct-peer
 headroom, failed retries and blocked routing-table handoff.
+
+Refresh passes keep a bounded traversal-scope snapshot, but now re-read a bucket's
+freshness immediately before a non-forced query. A completed ordinary lookup can
+update that timestamp while an earlier bucket query is still running. The stale
+snapshot previously repeated the later lookup. Forced refresh and expired-bucket
+behavior remain unchanged; a regression covers all three cases and fails against
+the previous source for the intervening-completion case.

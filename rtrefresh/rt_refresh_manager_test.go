@@ -131,3 +131,51 @@ func TestRefreshQueryCarriesItsActualInitiator(t *testing.T) {
 		})
 	}
 }
+
+func TestRefreshUsesLookupCompletionDuringTheSamePass(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name       string
+		forced     bool
+		age        time.Duration
+		wantSecond bool
+	}{
+		{"fresh completed lookup", false, 0, false},
+		{"expired lookup", false, 2 * time.Hour, true},
+		{"explicit forced refresh", true, 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			local := test.RandPeerIDFatal(t)
+			rt, err := kb.NewRoutingTable(8, kb.ConvertPeerID(local), time.Minute, pstore.NewMetrics(), 24*time.Hour, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = rt.Close() })
+			var later kb.ID
+			for cpl := uint(0); cpl <= 2; cpl++ {
+				id, err := rt.GenRandPeerID(cpl)
+				require.NoError(t, err)
+				added, err := rt.TryAddPeer(id, true, false)
+				require.NoError(t, err)
+				require.True(t, added)
+				if cpl == 1 {
+					later = kb.ConvertPeerID(id)
+				}
+			}
+			secondQueried := false
+			r := &RtRefreshManager{ctx: t.Context(), rt: rt, dhtPeerId: local, refreshQueryTimeout: time.Second, refreshInterval: time.Hour, refreshDoneCh: make(chan struct{}, 1),
+				refreshKeyGenFnc: func(cpl uint) (string, error) { return strconv.Itoa(int(cpl)), nil },
+				refreshQueryFnc: func(_ context.Context, key string) error {
+					if key == "0" {
+						rt.ResetCplRefreshedAtForID(later, time.Now().Add(-tc.age))
+					}
+					if key == "1" {
+						secondQueried = true
+					}
+					return nil
+				},
+			}
+			require.NoError(t, r.doRefresh(t.Context(), tc.forced))
+			require.Equal(t, tc.wantSecond, secondQueried, "later bucket ignored an intervening completed lookup or lost force/expiry semantics")
+		})
+	}
+}

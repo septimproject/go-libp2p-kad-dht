@@ -260,7 +260,15 @@ func (r *RtRefreshManager) doRefresh(ctx context.Context, forceRefresh bool) err
 		if forceRefresh {
 			err = r.refreshCpl(ctx, cpl)
 		} else {
-			err = r.refreshCplIfEligible(ctx, cpl, refreshCpls[cpl])
+			// A successful ordinary lookup can refresh a later bucket while
+			// this pass is blocked on an earlier one. Recheck at use time;
+			// the traversal snapshot describes scope, not current freshness.
+			last := refreshCpls[cpl]
+			current := r.rt.GetTrackedCplsForRefresh()
+			if int(cpl) < len(current) {
+				last = current[cpl]
+			}
+			err = r.refreshCplIfEligible(ctx, cpl, last)
 		}
 		return
 	}
