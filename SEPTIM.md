@@ -72,3 +72,21 @@ policy remain in Septim.
 Rebase this branch onto an explicitly selected upstream release, run affected
 upstream tests and Septim regressions, then pin the resulting commit in Septim's
 `go.mod`. Do not move an existing pin or add Septim application protocols here.
+
+## Local routing-query attribution
+
+`QueryPurposeOf` exposes fixed local initiator metadata for host adapters. Native
+peer admission/rechecks, self refresh and bucket refresh are tagged at their
+entry points; nested generic lookups preserve that cause. Value/peer operations
+supply defaults. `WithQueryPurpose` lets an adapter label its own placement walk.
+The metadata is never serialized and changes neither routing policy nor resource
+admission. Refresh attribution and context inheritance have focused regressions.
+
+Peer admission coalesces simultaneous checks for one identity under the existing
+lookup-check mutex. The in-flight map has at most the configured concurrency;
+there is no completed-peer TTL or new queue. A slot remains held until the
+routing-table handoff completes (or the node closes), preventing checked peers
+from accumulating outside the original concurrency bound. Failed checks release
+ownership and remain retryable. LookupCheckStats reports only fixed aggregate
+counters. Focused synctest/race scenarios exercise duplicate events, distinct-peer
+headroom, failed retries and blocked routing-table handoff.

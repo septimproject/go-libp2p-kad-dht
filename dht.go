@@ -132,8 +132,10 @@ type IpfsDHT struct {
 	// timeout for the lookupCheck operation
 	lookupCheckTimeout time.Duration
 	// number of concurrent lookupCheck operations
-	lookupCheckCapacity int
-	lookupChecksLk      sync.Mutex
+	lookupCheckCapacity                                           int
+	lookupChecksLk                                                sync.Mutex
+	lookupChecks                                                  map[peer.ID]struct{}
+	lookupCheckStarted, lookupCheckCoalesced, lookupCheckRejected uint64
 
 	// A function returning a set of bootstrap peers to fallback on if all other attempts to fix
 	// the routing table fail (or, e.g., this is the first time this node is
@@ -655,27 +657,42 @@ func (dht *IpfsDHT) peerFound(p peer.ID) {
 		logger.Errorw("failed to validate if peer is a DHT peer", "peer", p, "error", err)
 	} else if b {
 
-		// check if the maximal number of concurrent lookup checks is reached
 		dht.lookupChecksLk.Lock()
-		if dht.lookupCheckCapacity == 0 {
+		if _, pending := dht.lookupChecks[p]; pending {
+			dht.lookupCheckCoalesced++
 			dht.lookupChecksLk.Unlock()
-			// drop the new peer.ID if the maximal number of concurrent lookup
-			// checks is reached
 			return
 		}
+		// The peer may have entered the table since the first eligibility check.
+		if !dht.routingTable.UsefulNewPeer(p) {
+			dht.lookupChecksLk.Unlock()
+			return
+		}
+		if dht.lookupCheckCapacity == 0 {
+			dht.lookupCheckRejected++
+			dht.lookupChecksLk.Unlock()
+			return
+		}
+		if dht.lookupChecks == nil {
+			dht.lookupChecks = make(map[peer.ID]struct{})
+		}
+		dht.lookupChecks[p] = struct{}{}
+		dht.lookupCheckStarted++
 		dht.lookupCheckCapacity--
 		dht.lookupChecksLk.Unlock()
 
 		go func() {
-			livelinessCtx, cancel := context.WithTimeout(dht.ctx, dht.lookupCheckTimeout)
+			defer func() {
+				dht.lookupChecksLk.Lock()
+				delete(dht.lookupChecks, p)
+				dht.lookupCheckCapacity++
+				dht.lookupChecksLk.Unlock()
+			}()
+			livelinessCtx, cancel := context.WithTimeout(internal.WithQueryPurpose(dht.ctx, internal.QueryPeerAdmission), dht.lookupCheckTimeout)
 			defer cancel()
 
 			// performing a FIND_NODE query
 			err := dht.lookupCheck(livelinessCtx, p)
-
-			dht.lookupChecksLk.Lock()
-			dht.lookupCheckCapacity++
-			dht.lookupChecksLk.Unlock()
 
 			if err != nil {
 				logger.Debugw("connected peer not answering DHT request as expected", "peer", p, "error", err)

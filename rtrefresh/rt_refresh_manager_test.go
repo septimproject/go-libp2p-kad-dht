@@ -2,6 +2,7 @@ package rtrefresh
 
 import (
 	"context"
+	"github.com/libp2p/go-libp2p-kad-dht/internal"
 	"strconv"
 	"testing"
 	"time"
@@ -100,4 +101,33 @@ func TestSkipRefreshOnGapCpls(t *testing.T) {
 		require.Equal(t, 1, rt.NPeersForCpl(uint(i)))
 	}
 	require.Equal(t, 2, rt.NPeersForCpl(10))
+}
+
+func TestRefreshQueryCarriesItsActualInitiator(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		purpose internal.QueryPurpose
+	}{
+		{"self", internal.QuerySelfRefresh}, {"bucket", internal.QueryBucketRefresh},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local := test.RandPeerIDFatal(t)
+			rt, err := kb.NewRoutingTable(2, kb.ConvertPeerID(local), time.Hour, pstore.NewMetrics(), time.Hour, nil)
+			require.NoError(t, err)
+			var observed internal.QueryPurpose
+			r := &RtRefreshManager{rt: rt, dhtPeerId: local, refreshQueryTimeout: time.Second,
+				refreshKeyGenFnc: func(uint) (string, error) { return "random-key", nil },
+				refreshQueryFnc:  func(ctx context.Context, _ string) error { observed = internal.QueryPurposeOf(ctx); return nil },
+			}
+			ctx := internal.WithQueryPurpose(t.Context(), internal.QueryClosestLookup)
+			if tc.name == "self" {
+				err = r.queryForSelf(ctx)
+			} else {
+				err = r.refreshCpl(ctx, 0)
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.purpose, observed)
+		})
+	}
 }

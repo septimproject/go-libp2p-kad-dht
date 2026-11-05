@@ -52,6 +52,7 @@ func (dht *IpfsDHT) GetClosestPeersWithProgress(ctx context.Context, key string,
 }
 
 func (dht *IpfsDHT) getClosestPeers(ctx context.Context, key string, query queryFn) ([]peer.ID, error) {
+	ctx = internal.DefaultQueryPurpose(ctx, internal.QueryClosestLookup)
 	ctx, span := internal.StartSpan(ctx, "IpfsDHT.GetClosestPeers", trace.WithAttributes(internal.KeyAsAttribute("Key", key)))
 	defer span.End()
 

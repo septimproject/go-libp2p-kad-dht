@@ -33,6 +33,7 @@ const putOperationTimeout = 30 * time.Second
 // PutValue adds value corresponding to given Key.
 // This is the top level "Store" operation of the DHT
 func (dht *IpfsDHT) PutValue(ctx context.Context, key string, value []byte, opts ...routing.Option) (err error) {
+	ctx = internal.DefaultQueryPurpose(ctx, internal.QueryValuePlacement)
 	ctx, end := tracer.PutValue(dhtName, ctx, key, value, opts...)
 	defer func() { end(err) }()
 
@@ -155,6 +156,7 @@ func (dht *IpfsDHT) SearchValue(ctx context.Context, key string, opts ...routing
 // lookupErr is written before closing the result channel. GetValue consumes the
 // channel completely before reading it; the streaming API remains unchanged.
 func (dht *IpfsDHT) searchValue(ctx context.Context, key string, lookupErr *error, opts ...routing.Option) (ch <-chan []byte, err error) {
+	ctx = internal.DefaultQueryPurpose(ctx, internal.QueryValueLookup)
 	ctx, end := tracer.SearchValue(dhtName, ctx, key, opts...)
 	defer func() { ch, err = end(ch, err) }()
 
@@ -688,6 +690,7 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 
 // FindPeer searches for a peer with given ID.
 func (dht *IpfsDHT) FindPeer(ctx context.Context, id peer.ID) (pi peer.AddrInfo, err error) {
+	ctx = internal.DefaultQueryPurpose(ctx, internal.QueryPeerLookup)
 	ctx, end := tracer.FindPeer(dhtName, ctx, id)
 	defer func() { end(pi, err) }()
 

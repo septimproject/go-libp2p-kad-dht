@@ -132,6 +132,7 @@ func (r *RtRefreshManager) RefreshNoWait() {
 // pingAndEvictPeers pings Routing Table peers that haven't been heard of/from
 // in the interval they should have been and evict them if they don't reply.
 func (r *RtRefreshManager) pingAndEvictPeers(ctx context.Context) {
+	ctx = internal.WithQueryPurpose(ctx, internal.QueryPeerRecheck)
 	ctx, span := internal.StartSpan(ctx, "RefreshManager.PingAndEvictPeers")
 	defer span.End()
 
@@ -307,6 +308,7 @@ func (r *RtRefreshManager) refreshCplIfEligible(ctx context.Context, cpl uint, l
 }
 
 func (r *RtRefreshManager) refreshCpl(ctx context.Context, cpl uint) error {
+	ctx = internal.WithQueryPurpose(ctx, internal.QueryBucketRefresh)
 	ctx, span := internal.StartSpan(ctx, "RefreshManager.refreshCpl", trace.WithAttributes(attribute.Int("cpl", int(cpl))))
 	defer span.End()
 
@@ -332,6 +334,7 @@ func (r *RtRefreshManager) refreshCpl(ctx context.Context, cpl uint) error {
 }
 
 func (r *RtRefreshManager) queryForSelf(ctx context.Context) error {
+	ctx = internal.WithQueryPurpose(ctx, internal.QuerySelfRefresh)
 	ctx, span := internal.StartSpan(ctx, "RefreshManager.queryForSelf")
 	defer span.End()
 
