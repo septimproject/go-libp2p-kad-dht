@@ -63,6 +63,12 @@ this fork contains generic library changes. The original module path is retained
 
 ## Updating
 
+`PutLocalValue` exposes the existing serialized native value-store operation for
+bounded anti-entropy adapters. It validates/selects through the same store as
+PUT_VALUE and performs no lookup or replication. Host-free regressions cover
+validation, stale-record rejection and cancellation; application trust and repair
+policy remain in Septim.
+
 Rebase this branch onto an explicitly selected upstream release, run affected
 upstream tests and Septim regressions, then pin the resulting commit in Septim's
 `go.mod`. Do not move an existing pin or add Septim application protocols here.
